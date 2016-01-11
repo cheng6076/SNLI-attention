@@ -7,7 +7,7 @@ function LookupTableEmbedding_update:__init(nIndex, nOutput, wordvec)
    self._count = torch.IntTensor()
    self._input = torch.LongTensor()
    self.shouldScaleGradByFreq = false
-   self.gradMask = torch.ones(nIndex, nOutput)
+   self.gradMask = torch.ones(nIndex)
    self.output = torch.DoubleTensor()
    self.wordvec = wordvec
    self:reset(self.wordvec)
@@ -27,7 +27,7 @@ function LookupTableEmbedding_update:reset(wordvec)
    self.weight:normal(0, 1)
    for key, value in pairs(wordvec) do
        self.weight[key] = value
-       self.gradMask[key]:copy(self.gradMask[key]:zero())
+       self.gradMask[key] = 0
    end
 end
 
@@ -56,7 +56,7 @@ end
 function LookupTableEmbedding_update:accGradParameters(input, gradOutput, scale)
    input = self:makeInputContiguous(input)
    self.gradWeight.nn.LookupTable_accGradParameters(self, input, gradOutput, scale)
-   self.gradWeight:cmul(self.gradWeight, self.gradMask)
+   self.gradWeight:cmul(self.gradWeight, self.gradMask:view(self.gradMask:size(1),1):expandAs(self.gradWeight))
 end
 
 function LookupTableEmbedding_update:type(type)
