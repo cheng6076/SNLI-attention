@@ -8,8 +8,7 @@ function LookupTableEmbedding_train:__init(nIndex, nOutput, wordvec)
    self._input = torch.LongTensor()
    self.shouldScaleGradByFreq = false
    self.output = torch.DoubleTensor()
-   self.wordvec = wordvec
-   self:reset(self.wordvec)
+   self:reset(wordvec)
 end
 
 function LookupTableEmbedding_train:accUpdateOnly()

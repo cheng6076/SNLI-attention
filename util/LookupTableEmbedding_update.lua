@@ -9,8 +9,7 @@ function LookupTableEmbedding_update:__init(nIndex, nOutput, wordvec)
    self.shouldScaleGradByFreq = false
    self.gradMask = torch.ones(nIndex)
    self.output = torch.DoubleTensor()
-   self.wordvec = wordvec
-   self:reset(self.wordvec)
+   self:reset(wordvec)
 end
 
 function LookupTableEmbedding_update:accUpdateOnly()
