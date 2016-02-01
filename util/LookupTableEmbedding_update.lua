@@ -26,7 +26,7 @@ function LookupTableEmbedding_update:reset(wordvec)
    self.weight:normal(0, 1)
    for key, value in pairs(wordvec) do
        self.weight[key] = value
-       self.gradMask[key] = 0
+       self.gradMask[key] = 0.1
    end
 end
 

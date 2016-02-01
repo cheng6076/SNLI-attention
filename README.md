@@ -1,11 +1,12 @@
-# SNLI task with LSTM encoder-dencoder and neural attention
-This implements some baselines for the Standford Natural Language Inference task with the seq2seq model.
+# SNLI task with LSTM Memory Network encoder-dencoder and neural attention
+This is an implementation for the deep attention fusion LSTM memory network presented in the paper "[Long Short-Term Memory Networks for Machine Reading](http://arxiv.org/abs/1601.06733)" 
+Please note that it is a research code.
 
-* [LSTM-attention.lua] A simple word-word attention model. The model computes the decoders hidden states and the corresponding attentional encoder hidden states, performs average pooling to each, concatenate the result and feed them into a NN classifier. I used pre-trained word2vec to initialize the word vectors. Only those without pre-trained vectors are updated during training.
+## Setup and Usage
+This code requires [Torch7](http://torch.ch/) and [nngraph](http://github.com/torch/nngraph). It is tested on GPU only.
 
-* [LSTM-nonattention.lua] A non-attention baseline is implemented where all vectors are randomly initialized and updated during training.
+To run the code execute: th LSTMN.lua -gpuid 0
 
-I used online training to process one pair at a time, to make the computation of sequences with different lengths more accurate. But one can also use mini-batch training.
 
 ## Lookup Tables
 There are different ways to use pre-trained word vectors, which can be explored.

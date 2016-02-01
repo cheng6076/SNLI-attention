@@ -3,32 +3,34 @@ require 'nn'
 require 'nngraph'
 require 'rnn'
 model_utils = require 'util.model_utils'
-BatchLoader = require 'util.BatchLoaderB'
+BatchLoader = require 'util.BatchLoaderC'
 require 'util.misc'
 require 'util.CAveTable'
-require 'util.TensorAddVector'
-require 'util.LookupTableEmbedding_fixed'
-require 'util.LookupTableEmbedding_update'
+require 'optim'
+require 'util.ReplicateAdd'
 require 'util.LookupTableEmbedding_train'
 classifier_simple = require 'model.classifier_simple'
-encoder = require 'model.encoder_attention'
-decoder = require 'model.decoder_attention'
+encoder = require 'model.encoder_lstmn_w2v'
+decoder = require 'model.decoder_deep_w2v'
 cmd = torch.CmdLine()
 cmd:text()
 cmd:text('Options')
 cmd:option('-data_dir', 'data', 'path of the dataset')
+cmd:option('-batch_size', '32', 'number of batches')
 cmd:option('-max_epochs', 10, 'number of full passes through the training data')
 cmd:option('-rnn_size', 300, 'dimensionality of sentence embeddings')
 cmd:option('-word_vec_size', 300, 'dimensionality of word embeddings')
-cmd:option('-num_layers', 1, 'number of layers in the LSTM')
 cmd:option('-dropout',0.5,'dropout. 0 = no dropout')
 cmd:option('-seed',3435,'torch manual random number generator seed')
+cmd:option('-max_length', 15, 'max length allowed for each sentence')
 cmd:option('-print_every',500,'how many steps/minibatches between printing out the loss')
-cmd:option('-save_every', 50000, 'save epoch')
-cmd:option('-checkpoint_dir', 'cv_LSTM-attention', 'output directory where checkpoints get written')
+cmd:option('-save_every', 25000, 'save epoch')
+cmd:option('-checkpoint_dir', 'cv4', 'output directory where checkpoints get written')
 cmd:option('-savefile','model','filename to autosave the checkpont to. Will be inside checkpoint_dir/')
 cmd:option('-checkpoint', 'checkpoint.t7', 'start from a checkpoint if a valid checkpoint.t7 file is given')
-cmd:option('-learningRate', 0.1, 'learning rate')
+cmd:option('-learningRate', 0.001, 'learning rate')
+cmd:option('-beta1', 0.9, 'momentum parameter 1')
+cmd:option('-beta2', 0.999, 'momentum parameter 2')
 cmd:option('-decayRate',0.75,'decay rate for sgd')
 cmd:option('-decay_when',0.1,'decay if validation does not improve by more than this much')
 cmd:option('-param_init', 0.05, 'initialize parameters at')
@@ -57,15 +59,15 @@ if opt.cudnn == 1 then
 end
 
 -- create data loader
-loader = BatchLoader.create(opt.data_dir)
+loader = BatchLoader.create(opt.data_dir, opt.max_length, opt.batch_size)
 opt.seq_length = loader.max_sentence_l 
 opt.vocab_size = #loader.idx2word
-opt.classes = 3
+opt.classes = 3  --fixed here
 opt.word2vec = loader.word2vec
 -- model
 protos = {}
-protos.enc = encoder.lstm(opt.vocab_size, opt.rnn_size, opt.num_layers, opt.dropout, opt.word_vec_size, opt.word2vec)
-protos.dec = decoder.lstm(opt.vocab_size, opt.rnn_size, opt.num_layers, opt.dropout, opt.word_vec_size, opt.word2vec)
+protos.enc = encoder.lstmn(opt.vocab_size, opt.rnn_size, opt.dropout, opt.word_vec_size, opt.batch_size, opt.word2vec)
+protos.dec = decoder.lstmn(opt.vocab_size, opt.rnn_size, opt.dropout, opt.word_vec_size, opt.batch_size, opt.word2vec)
 protos.criterion = nn.ClassNLLCriterion()
 protos.classifier = classifier_simple.classifier(opt.rnn_size, opt.dropout, opt.classes)
 -- ship to gpu
@@ -80,19 +82,14 @@ clones = {}
 for name,proto in pairs(protos) do
   if name == 'enc' or name == 'dec' then
     print('cloning ' .. name)
-    clones[name] = model_utils.clone_many_times(proto, opt.seq_length, not proto.parameters)
+    clones[name] = model_utils.clone_many_times(proto, opt.max_length, not proto.parameters)
   end
 end
--- encoder initial states
-init_state = {}
-for L=1,opt.num_layers do
-  local h_init = torch.zeros(1, opt.rnn_size)
-  if opt.gpuid >=0 then h_init = h_init:cuda() end
-  table.insert(init_state, h_init:clone())
-  table.insert(init_state, h_init:clone())
-end
+-- encoder/decoder initial states, decoder initial alignment vector
+local h_init = torch.zeros(opt.batch_size, opt.rnn_size)
+if opt.gpuid >=0 then h_init = h_init:cuda() end
 
-local init_state_global = clone_list(init_state)
+
 --evaluation 
 function eval_split(split_idx)
   print('evaluating loss over split index ' .. split_idx)
@@ -107,33 +104,37 @@ function eval_split(split_idx)
       y = y:float():cuda()
       label = label:float():cuda()
     end
-    enc_length = x:size(2)
-    dec_length = y:size(2)
+
     -- Forward pass
     -- 1) encoder
-    local enc_out = {}
-    local enc_state = {[0] = init_state_global}
-    for t=1,enc_length do
-      protos.enc:evaluate()
-      local lst = protos.enc:forward({x[{{},t}], unpack(enc_state[t-1])})
-      enc_state[t] = {}
-      for i=1,#init_state do table.insert(enc_state[t], lst[i]) end
-      table.insert(enc_out, lst[#lst])
+    local rnn_c_enc = {}
+    local rnn_h_enc = {}
+    table.insert(rnn_c_enc, h_init:clone())
+    table.insert(rnn_h_enc, h_init:clone())
+    for t=1,opt.max_length do
+      clones.enc[t]:evaluate()
+      local lst = clones.enc[t]:forward({x[{{},t}], narrow_list(rnn_c_enc, 1, t), narrow_list(rnn_h_enc, 1, t)})
+      table.insert(rnn_c_enc, lst[1])
+      table.insert(rnn_h_enc, lst[2])
     end
     -- 2) decoder
-    local dec_out = {}
-    local att_out = {}
-    local dec_state = {[0] = enc_state[enc_length]}
-    for t=1,dec_length do
-      protos.dec:evaluate()
-      local lst = protos.dec:forward({y[{{},t}], enc_out, unpack(dec_state[t-1])})
-      dec_state[t] = {}
-      for i=1,#init_state do table.insert(dec_state[t], lst[i]) end
-      table.insert(dec_out, lst[#lst-1])
-      table.insert(att_out, lst[#lst])
+    local rnn_c_dec = {}
+    local rnn_h_dec = {}
+    local rnn_a = {[0] = h_init:clone()}
+    local rnn_alpha = {[0] = h_init:clone()}
+    table.insert(rnn_c_dec, h_init:clone())
+    table.insert(rnn_h_dec, h_init:clone())
+    for t=1,opt.max_length do
+      clones.dec[t]:evaluate()
+      local lst = clones.dec[t]:forward({y[{{},t}], rnn_a[t-1], rnn_alpha[t-1], narrow_list(rnn_c_dec, 1, t), narrow_list(rnn_h_dec, 1, t), rnn_c_enc, rnn_h_enc})
+      table.insert(rnn_a, lst[1])
+      table.insert(rnn_alpha, lst[2])
+      table.insert(rnn_c_dec, lst[3])
+      table.insert(rnn_h_dec, lst[4])
     end
     -- 3) classification
-    local prediction = protos.classifier:forward({att_out, dec_out})
+    protos.classifier:evaluate()
+    local prediction = protos.classifier:forward({rnn_h_enc, rnn_h_dec})
     local max,indice = prediction:max(2)   -- indice is a 2d tensor here, we need to flatten it...
     if indice[1][1] == label[1] then correct_count = correct_count + 1 end
   end
@@ -153,69 +154,78 @@ function feval(x)
     y = y:float():cuda()
     label = label:float():cuda()
   end
-  enc_length = x:size(2)
-  dec_length = y:size(2) 
+
   -- Forward pass
   -- 1) encoder
-  local enc_out = {}
-  local enc_state = {[0] = init_state_global}
-  for t=1,enc_length do
+  local rnn_c_enc = {}
+  local rnn_h_enc = {}
+  table.insert(rnn_c_enc, h_init:clone())
+  table.insert(rnn_h_enc, h_init:clone())
+  for t=1,opt.max_length do
     clones.enc[t]:training()
-    local lst = clones.enc[t]:forward({x[{{},t}], unpack(enc_state[t-1])})
-    enc_state[t] = {}
-    for i=1,#init_state do table.insert(enc_state[t], lst[i]) end
-    table.insert(enc_out, lst[#lst])
+    local lst = clones.enc[t]:forward({x[{{},t}], narrow_list(rnn_c_enc, 1, t), narrow_list(rnn_h_enc, 1, t)})
+    table.insert(rnn_c_enc, lst[1])
+    table.insert(rnn_h_enc, lst[2])
   end
   -- 2) decoder
-  local dec_out = {}
-  local att_out = {}
-  local dec_state = {[0] = enc_state[enc_length]}
-  for t=1,dec_length do
+  local rnn_c_dec = {}
+  local rnn_h_dec = {}
+  local rnn_a = {[0] = h_init:clone()}
+  local rnn_alpha = {[0] = h_init:clone()}
+  table.insert(rnn_c_dec, h_init:clone())
+  table.insert(rnn_h_dec, h_init:clone())
+  for t=1,opt.max_length do
     clones.dec[t]:training()
-    local lst = clones.dec[t]:forward({y[{{},t}], enc_out, unpack(dec_state[t-1])})
-    dec_state[t] = {}
-    for i=1,#init_state do table.insert(dec_state[t], lst[i]) end
-    table.insert(dec_out, lst[#lst-1])
-    table.insert(att_out, lst[#lst])
+    local lst = clones.dec[t]:forward({y[{{},t}], rnn_a[t-1], rnn_alpha[t-1], narrow_list(rnn_c_dec, 1, t), narrow_list(rnn_h_dec, 1, t), rnn_c_enc, rnn_h_enc})
+    table.insert(rnn_a, lst[1])
+    table.insert(rnn_alpha, lst[2])
+    table.insert(rnn_c_dec, lst[3])
+    table.insert(rnn_h_dec, lst[4])
   end
   -- 3) classification
-  local prediction = protos.classifier:forward({att_out, dec_out})
+  protos.classifier:training()
+  local prediction = protos.classifier:forward({rnn_h_enc, rnn_h_dec})
   local result = protos.criterion:forward(prediction, label)
-  
+
   -- Backward pass
   -- 1) classification
   local dresult = protos.criterion:backward(prediction, label)
-  local dprediction = protos.classifier:backward({att_out, dec_out}, dresult)
-  local datt_state = dprediction[1]
-  local ddec_state = {[0]=clone_list(init_state, true)}
-  for t=1,dec_length do
-    ddec_state[t] = clone_list(init_state, true)
-    ddec_state[t][#init_state] = dprediction[2][t]
+  local dprediction = protos.classifier:backward({rnn_alpha, rnn_h_dec}, dresult)
+  local drnn_alpha = clone_list(rnn_a, true) --true zeros
+  local drnn_a = clone_list(rnn_a, true)
+  local drnn_c_enc = clone_list(rnn_c_enc, true)
+  local drnn_h_enc = clone_list(rnn_h_enc, true)
+  local drnn_c_dec = clone_list(rnn_c_dec, true)
+  local drnn_h_dec = clone_list(rnn_h_dec, true)
+
+  for t=1,opt.max_length+1 do
+      drnn_h_enc[t]:add(dprediction[1][t])
+      drnn_h_dec[t]:add(dprediction[2][t])
   end
 
   -- 2) decoder
-  local denc_state = {[0]=clone_list(init_state, true)}
-  for t=1,enc_length do
-    denc_state[t] = clone_list(init_state, true)
-  end 
-
-  for t=dec_length,1,-1 do
-    table.insert(ddec_state[t], datt_state[t])
-    local dlst = clones.dec[t]:backward({y[{{},t}], enc_out, unpack(dec_state[t-1])}, ddec_state[t])
-    for k,v in pairs(dlst) do
-      if k == 2 then
-        for i=1,enc_length do denc_state[i][#init_state]:add(v[i]) end
-      elseif k > 2 then 
-        ddec_state[t-1][k-2]:add(v) 
-      end
+  for t=opt.max_length,1,-1 do
+    local dlst = clones.dec[t]:backward({y[{{},t}], rnn_a[t-1], rnn_alpha[t-1], narrow_list(rnn_c_dec, 1, t), narrow_list(rnn_h_dec, 1, t), rnn_c_enc, rnn_h_enc}, {drnn_a[t], drnn_alpha[t], drnn_c_dec[t+1], drnn_h_dec[t+1]})
+    drnn_a[t-1]:add(dlst[2])
+    drnn_alpha[t-1]:add(dlst[3])
+    for k=1, t do
+      drnn_c_dec[k]:add(dlst[4][k])    
+      drnn_h_dec[k]:add(dlst[5][k])    
+    end
+    for k=1, opt.max_length+1 do
+      drnn_c_enc[k]:add(dlst[6][k])
+      drnn_h_enc[k]:add(dlst[7][k])
     end
   end
+
   -- 3) encoder
-  for i=1,#init_state do denc_state[enc_length][i]:add(ddec_state[0][i]) end
-  for t=enc_length,1,-1 do
-    local dlst = clones.enc[t]:backward({x[{{},t}], unpack(enc_state[t-1])}, denc_state[t])
-    for k,v in pairs(dlst) do
-      if k > 1 then denc_state[t-1][k-1]:add(v) end
+  drnn_c_enc[opt.max_length+1]:add(drnn_c_dec[1])
+  drnn_h_enc[opt.max_length+1]:add(drnn_h_dec[1])
+  for t=opt.max_length,1,-1 do
+    dlst = clones.enc[t]:backward({x[{{},t}], narrow_list(rnn_c_enc, 1, t), narrow_list(rnn_h_enc, 1, t)}, {drnn_c_enc[t+1], drnn_h_enc[t+1]})
+    for k=1, t do
+      drnn_c_enc[k]:add(dlst[2][k])    
+      drnn_h_enc[k]:add(dlst[3][k])    
     end
   end
 
@@ -225,21 +235,21 @@ function feval(x)
     shrink_factor = opt.max_grad_norm / grad_norm
     grad_params:mul(shrink_factor)
   end
-  params:add(grad_params:mul(-lr))
-  return result 
+  return result, grad_params 
 end
 
 -- start training
 train_losses = {}
 val_losses = {}
-lr = opt.learningRate
+local optim_state = {learningRate = opt.learningRate, beta1 = opt.beta1, beta2 = opt.beta2}
 local iterations = opt.max_epochs * loader.split_sizes[1]
 for i = 1, iterations do
   -- train 
   local epoch = i / loader.split_sizes[1]
   local timer = torch.Timer()
   local time = timer:time().real
-  train_losses[i] = feval(params)
+  local _, loss = optim.adam(feval, params, optim_state)
+  train_losses[i] = loss[1]
   if i % opt.print_every == 0 then
     print(string.format("%d/%d (epoch %.2f), train_loss = %6.4f", i, iterations, epoch, train_losses[i]))
   end
@@ -248,7 +258,9 @@ for i = 1, iterations do
   if epoch == opt.max_epochs or i % opt.save_every == 0 then
     print ('evaluate on validation set')
     local val_loss = eval_split(2) -- 2 = validation
+    local test_loss = eval_split(3) -- 3 = test
     print (val_loss)
+    print (test_loss)
     val_losses[#val_losses+1] = val_loss
     local savefile = string.format('%s/model_%s_epoch%.2f_%.2f.t7', opt.checkpoint_dir, opt.savefile, epoch, val_loss)
     local checkpoint = {}
@@ -264,7 +276,7 @@ for i = 1, iterations do
   -- decay learning rate
   if i % loader.split_sizes[1] == 0 and #val_losses > 2 then
     if val_losses[#val_losses-1] - val_losses[#val_losses] < opt.decay_when then
-      lr = lr * opt.decayRate
+      opt.learningRate = opt.learningRate * opt.decayRate
     end
   end
 

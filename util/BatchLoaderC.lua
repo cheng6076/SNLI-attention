@@ -1,36 +1,58 @@
-local BatchLoader = {}
+local BatchLoaderC = {}
 local stringx = require('pl.stringx')
-BatchLoader.__index = BatchLoader
+BatchLoaderC.__index = BatchLoaderC
 
-function BatchLoader.create(data_dir)
+function BatchLoaderC.create(data_dir, max_sentence_l , batch_size)
     local self = {}
-    setmetatable(self, BatchLoader)
+    setmetatable(self, BatchLoaderC)
     local train_file = path.join(data_dir, 'train.txt')
     local valid_file = path.join(data_dir, 'dev.txt')
     local test_file = path.join(data_dir, 'test.txt')
     local input_files = {train_file, valid_file, test_file}
+    local input_w2v = path.join(data_dir, 'word2vec.txt')
 
     -- construct a tensor with all the data
-    local s1, s2, label, max_sentence_l, idx2word, word2idx = BatchLoader.text_to_tensor(input_files)
+    local s1, s2, label, idx2word, word2idx, word2vec = BatchLoaderC.text_to_tensor(input_files, max_sentence_l, input_w2v)
     self.max_sentence_l = max_sentence_l
     self.idx2word, self.word2idx = idx2word, word2idx
-    self.vocab_size = #self.idx2word  
+    self.vocab_size = #self.idx2word 
+    self.word2vec = word2vec
+    self.split_sizes = {}
+    self.all_batches = {}
+ 
     print(string.format('Word vocab size: %d', #self.idx2word))
     -- cut off the end for train/valid sets so that it divides evenly
-    self.all_batches = {s1, s2, label}
-    self.split_sizes = {#s1[1], #s1[2], #s1[3]} 
+    for split=1,3 do
+       local s1data = s1[split]
+       local s2data = s2[split]
+       local label_data = label[split]
+       local len = s1data:size(1)
+       if len % (batch_size) ~= 0 then
+          s1data = s1data:sub(1, batch_size * math.floor(len / batch_size))
+          s2data = s2data:sub(1, batch_size * math.floor(len / batch_size))
+          label_data = label_data:sub(1, batch_size * math.floor(len / batch_size))   --let's just make the batch_size a multiplier of the test data size
+       end
+
+       s1_batches = s1data:split(batch_size,1)
+       s2_batches = s2data:split(batch_size,1)
+       label_batches = label_data:split(batch_size,1)
+       nbatches = #s1_batches
+       self.split_sizes[split] = nbatches
+       self.all_batches[split] = {s1_batches, s2_batches, label_batches}
+    end
+ 
     self.batch_idx = {0,0,0}
     print(string.format('data load done. Number of batches in train: %d, val: %d, test: %d', self.split_sizes[1], self.split_sizes[2], self.split_sizes[3]))
     collectgarbage()
     return self
 end
 
-function BatchLoader:reset_batch_pointer(split_idx, batch_idx)
+function BatchLoaderC:reset_batch_pointer(split_idx, batch_idx)
     batch_idx = batch_idx or 0
     self.batch_idx[split_idx] = batch_idx
 end
 
-function BatchLoader:next_batch(split_idx)
+function BatchLoaderC:next_batch(split_idx)
     -- split_idx is integer: 1 = train, 2 = val, 3 = test
     self.batch_idx[split_idx] = self.batch_idx[split_idx] + 1
     if self.batch_idx[split_idx] > self.split_sizes[split_idx] then
@@ -38,16 +60,15 @@ function BatchLoader:next_batch(split_idx)
     end
     -- pull out the correct next batch
     local idx = self.batch_idx[split_idx]
-    return self.all_batches[1][split_idx][idx], self.all_batches[2][split_idx][idx], self.all_batches[3][split_idx][idx]
+    return self.all_batches[split_idx][1][idx], self.all_batches[split_idx][2][idx], self.all_batches[split_idx][3][idx]
 end
 
-function BatchLoader.text_to_tensor(input_files)
+function BatchLoaderC.text_to_tensor(input_files, max_sentence_l, input_w2v)
     print('Processing text into tensors...')
     local f
     local vocab_count = {} -- vocab count 
-    local max_sentence_l = 0 -- max sentence length
-    local idx2word = {} 
-    local word2idx = {}; 
+    local idx2word = {'START'} 
+    local word2idx = {}; word2idx['START'] = 1
     local split_counts = {}
     local output_tensors1 = {}  --for sentence1
     local output_tensors2 = {}  -- for sentence2
@@ -59,36 +80,20 @@ function BatchLoader.text_to_tensor(input_files)
        local scounts = 0
        for line in f:lines() do
           scounts = scounts + 1
-          if split==1 then  --we don't care the max sentence length is dev or test
-            local wcounts = 0
-            local triplet = stringx.split(line, '\t')
-            local label, s1, s2 = triplet[1], triplet[2], triplet[3]
-            for word in s1:gmatch'([^%s]+)' do
-	       wcounts = wcounts + 1
-            end
-            max_sentence_l = math.max(max_sentence_l, wcounts)
-            -- we find the longest sentence in general, just to save some efforts
-            wcount = 0
-            for word in s2:gmatch'([^%s]+)' do
-	       wcounts = wcounts + 1
-            end
-            max_sentence_l = math.max(max_sentence_l, wcounts)
-          end
        end
        f:close()
        split_counts[split] = scounts  --the number of sentences in each split
     end
       
-    print('After first pass of data, max sentence length is: ' .. max_sentence_l)
     print(string.format('Token count: train %d, val %d, test %d', 
     			split_counts[1], split_counts[2], split_counts[3]))
     
     for	split = 1,3 do -- split = 1 (train), 2 (val), or 3 (test)     
        -- Preallocate the tensors we will need.
        -- Watch out the second one needs a lot of RAM.
-       output_tensors1[split] = {} 
-       output_tensors2[split] = {} 
-       labels[split] = {} 
+       output_tensors1[split] = torch.ones(split_counts[split], max_sentence_l):long() 
+       output_tensors2[split] = torch.ones(split_counts[split], max_sentence_l):long() 
+       labels[split] = torch.zeros(split_counts[split]):long() 
        -- process each file in split
        f = io.open(input_files[split], 'r')
        local sentence_num = 0
@@ -96,44 +101,50 @@ function BatchLoader.text_to_tensor(input_files)
           sentence_num = sentence_num + 1
           local triplet = stringx.split(line, '\t')
           local label, s1, s2 = triplet[1], triplet[2], triplet[3]
-          label = torch.Tensor({tonumber(label) + 1})  --0 is not allowed in torch
-          labels[split][sentence_num] = label
-          -- count word and create zero tensor for sentence1
-          local word_count = 0
-          for rword in s1:gmatch'([^%s]+)' do
-            word_count = word_count + 1
-          end
-          output_tensors1[split][sentence_num] = torch.zeros(1, word_count)  --make it 2d just to be compatible with some nn modules
+          labels[split][sentence_num] = tonumber(label) + 1
           -- append tokens in the sentence1
-          local word_num = 0
+          output_tensors1[split][sentence_num][1] = 1
+          local word_num = 1
           for rword in s1:gmatch'([^%s]+)' do
              word_num = word_num + 1
              if word2idx[rword]==nil then
                 idx2word[#idx2word + 1] = rword 
                 word2idx[rword] = #idx2word
              end
-             output_tensors1[split][sentence_num][1][word_num] = word2idx[rword]
+             output_tensors1[split][sentence_num][word_num] = word2idx[rword]
+             if word_num == max_sentence_l then break end
           end
-          -- count word and create zero tensor for sentence2
-          word_count = 0
-          for rword in s2:gmatch'([^%s]+)' do
-            word_count = word_count + 1
-          end
-          output_tensors2[split][sentence_num] = torch.zeros(1, word_count)
           -- append tokens in the sentence1
-          word_num = 0
+          output_tensors1[split][sentence_num][1] = 1
+          word_num = 1
           for rword in s2:gmatch'([^%s]+)' do
              word_num = word_num + 1
              if word2idx[rword]==nil then
                 idx2word[#idx2word + 1] = rword 
                 word2idx[rword] = #idx2word
              end
-             output_tensors2[split][sentence_num][1][word_num] = word2idx[rword]
+             output_tensors2[split][sentence_num][word_num] = word2idx[rword]
+             if word_num == max_sentence_l then break end
           end
        end
     end
-    return output_tensors1, output_tensors2, labels, max_sentence_l, idx2word, word2idx
+
+    local w2v = {}
+    local w2v_file = io.open(input_w2v, 'r')
+    for line in w2v_file:lines() do
+        tokens = stringx.split(line, ' ')
+        word = tokens[1]
+        if word2idx[word] ~= nil then
+            w2v[word2idx[word]] = torch.zeros(300)  --fixed for google news vectors
+            for tid=2,301 do
+                w2v[word2idx[word]][tid-1] = tonumber(tokens[tid])
+            end
+        end
+    end
+    w2v_file:close()
+
+    return output_tensors1, output_tensors2, labels, idx2word, word2idx, w2v
 end
 
-return BatchLoader
+return BatchLoaderC
 
