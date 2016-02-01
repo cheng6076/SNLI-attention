@@ -15,4 +15,4 @@ There are different ways to use pre-trained word vectors, which can be explored.
 
 * [LookupTableEmbedding_train]: Same as above but all word vectors are updated during training.
 
-* [LookupTableEmbedding_update]: Same as above but only words without pre-trained vectors get updated during training, as used in Rocktäschel et al., 2015.
+* [LookupTableEmbedding_update]: Same as above but the gradient of words with pre-trained vectors will be scaled by a factor of 0.1 .
