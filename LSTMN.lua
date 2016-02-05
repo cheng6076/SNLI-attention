@@ -16,7 +16,7 @@ cmd = torch.CmdLine()
 cmd:text()
 cmd:text('Options')
 cmd:option('-data_dir', 'data', 'path of the dataset')
-cmd:option('-batch_size', '32', 'number of batches')
+cmd:option('-batch_size', '16', 'number of batches')
 cmd:option('-max_epochs', 10, 'number of full passes through the training data')
 cmd:option('-rnn_size', 300, 'dimensionality of sentence embeddings')
 cmd:option('-word_vec_size', 300, 'dimensionality of word embeddings')
@@ -98,7 +98,7 @@ function eval_split(split_idx)
   local correct_count = 0
   for i = 1,n do
     -- load data
-    local x, y, label = loader:next_batch(1)
+    local x, y, label = loader:next_batch(split_idx)
     if opt.gpuid >= 0 then
       x = x:float():cuda()
       y = y:float():cuda()
