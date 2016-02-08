@@ -190,7 +190,7 @@ function feval(x)
   -- Backward pass
   -- 1) classification
   local dresult = protos.criterion:backward(prediction, label)
-  local dprediction = protos.classifier:backward({rnn_alpha, rnn_h_dec}, dresult)
+  local dprediction = protos.classifier:backward({rnn_h_enc, rnn_h_dec}, dresult)
   local drnn_alpha = clone_list(rnn_a, true) --true zeros
   local drnn_a = clone_list(rnn_a, true)
   local drnn_c_enc = clone_list(rnn_c_enc, true)
