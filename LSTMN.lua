@@ -122,8 +122,8 @@ function eval_split(split_idx)
     local rnn_h_dec = {}
     local rnn_a = {[0] = h_init:clone()}
     local rnn_alpha = {[0] = h_init:clone()}
-    table.insert(rnn_c_dec, h_init:clone())
-    table.insert(rnn_h_dec, h_init:clone())
+    table.insert(rnn_c_dec, rnn_c_enc[opt.max_length+1]:clone())
+    table.insert(rnn_h_dec, rnn_h_enc[opt.max_length+1]:clone())
     for t=1,opt.max_length do
       clones.dec[t]:evaluate()
       local lst = clones.dec[t]:forward({y[{{},t}], rnn_a[t-1], rnn_alpha[t-1], narrow_list(rnn_c_dec, 1, t), narrow_list(rnn_h_dec, 1, t), rnn_c_enc, rnn_h_enc})
@@ -172,8 +172,8 @@ function feval(x)
   local rnn_h_dec = {}
   local rnn_a = {[0] = h_init:clone()}
   local rnn_alpha = {[0] = h_init:clone()}
-  table.insert(rnn_c_dec, h_init:clone())
-  table.insert(rnn_h_dec, h_init:clone())
+  table.insert(rnn_c_dec, rnn_c_enc[opt.max_length+1]:clone())
+  table.insert(rnn_h_dec, rnn_h_enc[opt.max_length+1]:clone())
   for t=1,opt.max_length do
     clones.dec[t]:training()
     local lst = clones.dec[t]:forward({y[{{},t}], rnn_a[t-1], rnn_alpha[t-1], narrow_list(rnn_c_dec, 1, t), narrow_list(rnn_h_dec, 1, t), rnn_c_enc, rnn_h_enc})
