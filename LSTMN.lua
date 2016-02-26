@@ -17,9 +17,15 @@ cmd = torch.CmdLine()
 cmd:text()
 cmd:text('Options')
 cmd:option('-data_dir', 'data', 'path of the dataset')
+<<<<<<< HEAD
 cmd:option('-batch_size', '16', 'number of batches')  
 cmd:option('-max_epochs', 4, 'number of full passes through the training data')
 cmd:option('-rnn_size', 400, 'dimensionality of sentence embeddings')
+=======
+cmd:option('-batch_size', '16', 'number of batches')
+cmd:option('-max_epochs', 10, 'number of full passes through the training data')
+cmd:option('-rnn_size', 300, 'dimensionality of sentence embeddings')
+>>>>>>> c54f4a2d267999d096a0ad98178096d4d5f3c82f
 cmd:option('-word_vec_size', 300, 'dimensionality of word embeddings')
 cmd:option('-dropout',0.4,'dropout. 0 = no dropout')
 cmd:option('-seed',3435,'torch manual random number generator seed')
