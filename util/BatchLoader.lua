@@ -1,18 +1,18 @@
-local BatchLoaderC = {}
+local BatchLoader = {}
 local stringx = require('pl.stringx')
-BatchLoaderC.__index = BatchLoaderC
+BatchLoader.__index = BatchLoader
 
-function BatchLoaderC.create(data_dir, max_sentence_l , batch_size)
+function BatchLoader.create(data_dir, max_sentence_l , batch_size)
     local self = {}
-    setmetatable(self, BatchLoaderC)
+    setmetatable(self, BatchLoader)
     local train_file = path.join(data_dir, 'train.txt')
     local valid_file = path.join(data_dir, 'dev.txt')
     local test_file = path.join(data_dir, 'test.txt')
     local input_files = {train_file, valid_file, test_file}
-    local input_w2v = path.join(data_dir, 'word2vec.txt')
+    local input_w2v = 'vectors.txt'
 
     -- construct a tensor with all the data
-    local s1, s2, label, idx2word, word2idx, word2vec = BatchLoaderC.text_to_tensor(input_files, max_sentence_l, input_w2v)
+    local s1, s2, label, idx2word, word2idx, word2vec = BatchLoader.text_to_tensor(input_files, max_sentence_l, input_w2v)
     self.max_sentence_l = max_sentence_l
     self.idx2word, self.word2idx = idx2word, word2idx
     self.vocab_size = #self.idx2word 
@@ -47,12 +47,12 @@ function BatchLoaderC.create(data_dir, max_sentence_l , batch_size)
     return self
 end
 
-function BatchLoaderC:reset_batch_pointer(split_idx, batch_idx)
+function BatchLoader:reset_batch_pointer(split_idx, batch_idx)
     batch_idx = batch_idx or 0
     self.batch_idx[split_idx] = batch_idx
 end
 
-function BatchLoaderC:next_batch(split_idx)
+function BatchLoader:next_batch(split_idx)
     -- split_idx is integer: 1 = train, 2 = val, 3 = test
     self.batch_idx[split_idx] = self.batch_idx[split_idx] + 1
     if self.batch_idx[split_idx] > self.split_sizes[split_idx] then
@@ -63,12 +63,12 @@ function BatchLoaderC:next_batch(split_idx)
     return self.all_batches[split_idx][1][idx], self.all_batches[split_idx][2][idx], self.all_batches[split_idx][3][idx]
 end
 
-function BatchLoaderC.text_to_tensor(input_files, max_sentence_l, input_w2v)
+function BatchLoader.text_to_tensor(input_files, max_sentence_l, input_w2v)
     print('Processing text into tensors...')
     local f
     local vocab_count = {} -- vocab count 
-    local idx2word = {'START'} 
-    local word2idx = {}; word2idx['START'] = 1
+    local idx2word = {'ZERO', 'START'} 
+    local word2idx = {}; word2idx['ZERO'] = 1; word2idx['START'] = 2
     local split_counts = {}
     local output_tensors1 = {}  --for sentence1
     local output_tensors2 = {}  -- for sentence2
@@ -103,7 +103,7 @@ function BatchLoaderC.text_to_tensor(input_files, max_sentence_l, input_w2v)
           local label, s1, s2 = triplet[1], triplet[2], triplet[3]
           labels[split][sentence_num] = tonumber(label) + 1
           -- append tokens in the sentence1
-          output_tensors1[split][sentence_num][1] = 1
+          output_tensors1[split][sentence_num][1] = 2
           local word_num = 1
           for rword in s1:gmatch'([^%s]+)' do
              word_num = word_num + 1
@@ -114,8 +114,8 @@ function BatchLoaderC.text_to_tensor(input_files, max_sentence_l, input_w2v)
              output_tensors1[split][sentence_num][word_num] = word2idx[rword]
              if word_num == max_sentence_l then break end
           end
-          -- append tokens in the sentence1
-          output_tensors1[split][sentence_num][1] = 1
+          -- append tokens in the sentence2
+          output_tensors2[split][sentence_num][1] = 2
           word_num = 1
           for rword in s2:gmatch'([^%s]+)' do
              word_num = word_num + 1
@@ -135,7 +135,7 @@ function BatchLoaderC.text_to_tensor(input_files, max_sentence_l, input_w2v)
         tokens = stringx.split(line, ' ')
         word = tokens[1]
         if word2idx[word] ~= nil then
-            w2v[word2idx[word]] = torch.zeros(300)  --fixed for google news vectors
+            w2v[word2idx[word]] = torch.zeros(300) 
             for tid=2,301 do
                 w2v[word2idx[word]][tid-1] = tonumber(tokens[tid])
             end
@@ -146,5 +146,5 @@ function BatchLoaderC.text_to_tensor(input_files, max_sentence_l, input_w2v)
     return output_tensors1, output_tensors2, labels, idx2word, word2idx, w2v
 end
 
-return BatchLoaderC
+return BatchLoader
 

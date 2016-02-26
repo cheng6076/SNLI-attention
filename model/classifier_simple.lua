@@ -11,6 +11,7 @@ function classifier_simple.classifier(rnn_size, dropout, classes)
   local h_dec_ave = nn.CAveTable()(inputs[2])
   local h_concat = nn.JoinTable(2)({h_enc_ave, h_dec_ave})
   local top_h = nn.ReLU()(nn.Linear(2*rnn_size, rnn_size)(h_concat))
+  top_h = nn.ReLU()(nn.Linear(rnn_size, rnn_size)(top_h))
   if dropout > 0 then top_h = nn.Dropout(dropout)(top_h) end
   local proj = nn.Linear(rnn_size, classes)(top_h)
   local logsoft = nn.LogSoftMax()(proj)

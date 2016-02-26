@@ -3,7 +3,8 @@ require 'nn'
 require 'nngraph'
 require 'rnn'
 model_utils = require 'util.model_utils'
-BatchLoader = require 'util.BatchLoaderC'
+BatchLoader = require 'util.BatchLoader'
+require 'util.MaskedLoss'
 require 'util.misc'
 require 'util.CAveTable'
 require 'optim'
@@ -16,15 +17,15 @@ cmd = torch.CmdLine()
 cmd:text()
 cmd:text('Options')
 cmd:option('-data_dir', 'data', 'path of the dataset')
-cmd:option('-batch_size', '16', 'number of batches')
-cmd:option('-max_epochs', 10, 'number of full passes through the training data')
-cmd:option('-rnn_size', 300, 'dimensionality of sentence embeddings')
+cmd:option('-batch_size', '16', 'number of batches')  
+cmd:option('-max_epochs', 4, 'number of full passes through the training data')
+cmd:option('-rnn_size', 400, 'dimensionality of sentence embeddings')
 cmd:option('-word_vec_size', 300, 'dimensionality of word embeddings')
-cmd:option('-dropout',0.5,'dropout. 0 = no dropout')
+cmd:option('-dropout',0.4,'dropout. 0 = no dropout')
 cmd:option('-seed',3435,'torch manual random number generator seed')
-cmd:option('-max_length', 15, 'max length allowed for each sentence')
-cmd:option('-print_every',500,'how many steps/minibatches between printing out the loss')
-cmd:option('-save_every', 25000, 'save epoch')
+cmd:option('-max_length', 20, 'max length allowed for each sentence')
+cmd:option('-print_every',1000,'how many steps/minibatches between printing out the loss')
+cmd:option('-save_every', 12500, 'save epoch')
 cmd:option('-checkpoint_dir', 'cv4', 'output directory where checkpoints get written')
 cmd:option('-savefile','model','filename to autosave the checkpont to. Will be inside checkpoint_dir/')
 cmd:option('-checkpoint', 'checkpoint.t7', 'start from a checkpoint if a valid checkpoint.t7 file is given')
@@ -62,7 +63,7 @@ end
 loader = BatchLoader.create(opt.data_dir, opt.max_length, opt.batch_size)
 opt.seq_length = loader.max_sentence_l 
 opt.vocab_size = #loader.idx2word
-opt.classes = 3  --fixed here
+opt.classes = 3
 opt.word2vec = loader.word2vec
 -- model
 protos = {}
@@ -77,6 +78,20 @@ end
 -- params and grads
 params, grad_params = model_utils.combine_all_parameters(protos.enc, protos.dec, protos.classifier)
 print('number of parameters in the model: ' .. params:nElement())
+
+function get_layer(layer)
+  if layer.name ~= nil then
+    if layer.name == 'enc_lookup' then
+      enc_lookup = layer
+    elseif layer.name == 'dec_lookup' then
+      dec_lookup = layer
+    end
+  end
+end
+protos.enc:apply(get_layer)
+protos.dec:apply(get_layer)
+--dec_lookup:share(enc_lookup, 'weight')
+
 -- make a bunch of clones after flattening, as that reallocates memory
 clones = {}
 for name,proto in pairs(protos) do
@@ -122,8 +137,8 @@ function eval_split(split_idx)
     local rnn_h_dec = {}
     local rnn_a = {[0] = h_init:clone()}
     local rnn_alpha = {[0] = h_init:clone()}
-    table.insert(rnn_c_dec, h_init:clone())
-    table.insert(rnn_h_dec, h_init:clone())
+    table.insert(rnn_c_dec, rnn_c_enc[opt.max_length+1]:clone())
+    table.insert(rnn_h_dec, rnn_h_enc[opt.max_length+1]:clone())
     for t=1,opt.max_length do
       clones.dec[t]:evaluate()
       local lst = clones.dec[t]:forward({y[{{},t}], rnn_a[t-1], rnn_alpha[t-1], narrow_list(rnn_c_dec, 1, t), narrow_list(rnn_h_dec, 1, t), rnn_c_enc, rnn_h_enc})
@@ -172,8 +187,8 @@ function feval(x)
   local rnn_h_dec = {}
   local rnn_a = {[0] = h_init:clone()}
   local rnn_alpha = {[0] = h_init:clone()}
-  table.insert(rnn_c_dec, h_init:clone())
-  table.insert(rnn_h_dec, h_init:clone())
+  table.insert(rnn_c_dec, rnn_c_enc[opt.max_length+1]:clone())
+  table.insert(rnn_h_dec, rnn_h_enc[opt.max_length+1]:clone())
   for t=1,opt.max_length do
     clones.dec[t]:training()
     local lst = clones.dec[t]:forward({y[{{},t}], rnn_a[t-1], rnn_alpha[t-1], narrow_list(rnn_c_dec, 1, t), narrow_list(rnn_h_dec, 1, t), rnn_c_enc, rnn_h_enc})
@@ -190,7 +205,7 @@ function feval(x)
   -- Backward pass
   -- 1) classification
   local dresult = protos.criterion:backward(prediction, label)
-  local dprediction = protos.classifier:backward({rnn_alpha, rnn_h_dec}, dresult)
+  local dprediction = protos.classifier:backward({rnn_h_enc, rnn_h_dec}, dresult)
   local drnn_alpha = clone_list(rnn_a, true) --true zeros
   local drnn_a = clone_list(rnn_a, true)
   local drnn_c_enc = clone_list(rnn_c_enc, true)
@@ -258,9 +273,11 @@ for i = 1, iterations do
   if epoch == opt.max_epochs or i % opt.save_every == 0 then
     print ('evaluate on validation set')
     local val_loss = eval_split(2) -- 2 = validation
-    local test_loss = eval_split(3) -- 3 = test
     print (val_loss)
-    print (test_loss)
+    if epoch>1.5 then
+      local test_loss = eval_split(3) -- 3 = test
+      print (test_loss)
+    end
     val_losses[#val_losses+1] = val_loss
     local savefile = string.format('%s/model_%s_epoch%.2f_%.2f.t7', opt.checkpoint_dir, opt.savefile, epoch, val_loss)
     local checkpoint = {}
@@ -279,6 +296,12 @@ for i = 1, iterations do
       opt.learningRate = opt.learningRate * opt.decayRate
     end
   end
+
+  -- index 1 is zero
+  enc_lookup.weight[1]:zero()
+  enc_lookup.gradWeight[1]:zero()
+  dec_lookup.weight[1]:zero()
+  dec_lookup.gradWeight[1]:zero()
 
   -- misc
   if i%5==0 then collectgarbage() end
