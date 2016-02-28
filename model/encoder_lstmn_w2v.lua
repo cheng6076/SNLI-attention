@@ -1,5 +1,11 @@
 local encoder_lstmn_w2v = {}
-LookupTable = nn.LookupTableEmbedding_train
+if nn.LookupTableEmbedding_train then
+  LookupTable = nn.LookupTableEmbedding_train
+elseif nn.LookupTableEmbedding_fixed then
+  LookupTable = nn.LookupTableEmbedding_fixed
+else
+  LookupTable = nn.LookupTableEmbedding_update
+end
 
 function encoder_lstmn_w2v.lstmn(input_size, rnn_size, dropout, word_emb_size, batch_size, word2vec)
   -- input_size : vocab size
@@ -18,7 +24,9 @@ function encoder_lstmn_w2v.lstmn(input_size, rnn_size, dropout, word_emb_size, b
   local prev_h_table = inputs[3]
 
   -- the input to this layer
-  word_vec = LookupTable(input_size, vec_size, word2vec)(inputs[1])
+  word_vec_layer = LookupTable(input_size, vec_size, word2vec)
+  word_vec_layer.name = 'enc_lookup'
+  word_vec = word_vec_layer(inputs[1])
   x = nn.Identity()(word_vec)
   input_size_L = vec_size
 
@@ -27,7 +35,7 @@ function encoder_lstmn_w2v.lstmn(input_size, rnn_size, dropout, word_emb_size, b
   local attention_x = nn.Linear(input_size_L, rnn_size)(x)
   local attention_h = nn.Linear(rnn_size, rnn_size)(nn.View(-1, rnn_size)(prev_h_join))   
   attention_h = nn.View(batch_size, -1)(attention_h)
-  local attention_sum = nn.Tanh()(nn.ReplicateAdd()({attention_h, attention_x}))
+  local attention_sum = nn.Tanh()(nn.AddScalar()({attention_h, attention_x}))
   attention_sum = nn.View(-1, rnn_size)(attention_sum)
   local attention_score = nn.Linear(rnn_size, 1)(attention_sum)  
   attention_score = nn.View(batch_size, -1)(attention_score)

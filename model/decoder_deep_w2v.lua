@@ -1,5 +1,12 @@
 local decoder_deep_w2v = {}
-LookupTable = nn.LookupTableEmbedding_train
+local ok, cunn = pcall(require, 'fbcunn')
+if nn.LookupTableEmbedding_train then
+  LookupTable = nn.LookupTableEmbedding_train
+elseif nn.LookupTableEmbedding_fixed then
+  LookupTable = nn.LookupTableEmbedding_fixed
+else
+  LookupTable = nn.LookupTableEmbedding_update
+end
 
 function decoder_deep_w2v.lstmn(input_size, rnn_size, dropout, word_emb_size, batch_size, word2vec)
   -- input_size : vocab size
@@ -23,23 +30,26 @@ function decoder_deep_w2v.lstmn(input_size, rnn_size, dropout, word_emb_size, ba
   local prev_h_table = inputs[5]
   local enc_c_table = inputs[6]
   local enc_h_table = inputs[7]
-  word_vec = LookupTable(input_size, vec_size, word2vec)(inputs[1])
+  word_vec_layer = LookupTable(input_size, vec_size, word2vec)
+  word_vec_layer.name = 'dec_lookup'
+  word_vec = word_vec_layer(inputs[1])
+
   x = nn.Identity()(word_vec)
   local x_all = nn.Linear(vec_size, 7 * rnn_size)(x)
 
   -- intra attention
-  local prev_h_join = nn.JoinTable(1,1)(prev_h_table)
-  local prev_c_join = nn.JoinTable(1,1)(prev_c_table)
+  local prev_h_join = nn.JoinTable(2)(prev_h_table)
+  local prev_c_join = nn.JoinTable(2)(prev_c_table)
   local intra_x = nn.Narrow(2, 1, rnn_size)(x_all)
   local intra_a = nn.Linear(rnn_size, rnn_size)(prev_a_intra)
   intra_x = nn.CAddTable()({intra_x, intra_a})
   local intra_h = nn.Linear(rnn_size, rnn_size)(nn.View(-1, rnn_size)(prev_h_join))   
   intra_h = nn.View(batch_size, -1)(intra_h)
-  local intra_sum = nn.Tanh()(nn.ReplicateAdd()({intra_h, intra_x}))
+  local intra_sum = nn.Tanh()(nn.AddScalar()({intra_h, intra_x}))
   intra_sum = nn.View(-1, rnn_size)(intra_sum)
   local intra_score = nn.Linear(rnn_size, 1)(intra_sum)  
   intra_score = nn.View(batch_size, -1)(intra_score)
-  intra_score = nn.SoftMax(1,1)(intra_score) 
+  intra_score = nn.SoftMax(2)(intra_score) 
   intra_score = nn.View(batch_size, 1, -1)(intra_score)
   prev_h_join = nn.View(batch_size, -1, rnn_size)(prev_h_join)
   prev_c_join = nn.View(batch_size, -1, rnn_size)(prev_c_join)
@@ -47,18 +57,18 @@ function decoder_deep_w2v.lstmn(input_size, rnn_size, dropout, word_emb_size, ba
   local prev_c = nn.View(batch_size, rnn_size)(nn.MM(false, false)({intra_score, prev_c_join}))
 
   -- inter attention
-  local enc_h_join = nn.JoinTable(1,1)(enc_h_table)
-  local enc_c_join = nn.JoinTable(1,1)(enc_c_table)
+  local enc_h_join = nn.JoinTable(2)(enc_h_table)
+  local enc_c_join = nn.JoinTable(2)(enc_c_table)
   local inter_x = nn.Narrow(2, rnn_size + 1, rnn_size)(x_all)
   local inter_a = nn.Linear(rnn_size, rnn_size)(prev_a_inter)
   inter_x = nn.CAddTable()({inter_x, inter_a})
   local inter_h = nn.Linear(rnn_size, rnn_size)(nn.View(-1, rnn_size)(enc_h_join))   
   inter_h = nn.View(batch_size, -1)(inter_h)
-  local inter_sum = nn.Tanh()(nn.ReplicateAdd()({inter_h, inter_x}))
+  local inter_sum = nn.Tanh()(nn.AddScalar()({inter_h, inter_x}))
   inter_sum = nn.View(-1, rnn_size)(inter_sum)
   local inter_score = nn.Linear(rnn_size, 1)(inter_sum)  
   inter_score = nn.View(batch_size, -1)(inter_score)
-  inter_score = nn.SoftMax(1,1)(inter_score) 
+  inter_score = nn.SoftMax(2)(inter_score) 
   inter_score = nn.View(batch_size, 1, -1)(inter_score)
   enc_h_join = nn.View(batch_size, -1, rnn_size)(enc_h_join)
   enc_c_join = nn.View(batch_size, -1, rnn_size)(enc_c_join)
