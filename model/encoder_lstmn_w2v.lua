@@ -35,7 +35,7 @@ function encoder_lstmn_w2v.lstmn(input_size, rnn_size, dropout, word_emb_size, b
   local attention_x = nn.Linear(input_size_L, rnn_size)(x)
   local attention_h = nn.Linear(rnn_size, rnn_size)(nn.View(-1, rnn_size)(prev_h_join))   
   attention_h = nn.View(batch_size, -1)(attention_h)
-  local attention_sum = nn.Tanh()(nn.AddScalar()({attention_h, attention_x}))
+  local attention_sum = nn.Tanh()(nn.ReplicateAdd()({attention_h, attention_x}))
   attention_sum = nn.View(-1, rnn_size)(attention_sum)
   local attention_score = nn.Linear(rnn_size, 1)(attention_sum)  
   attention_score = nn.View(batch_size, -1)(attention_score)
