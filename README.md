@@ -20,3 +20,7 @@ There are different ways to use pre-trained word vectors, which has not been ful
 * [LookupTableEmbedding_train]: Same as above but all word vectors are updated during training.
 
 * [LookupTableEmbedding_update]: Same as above but only words without pre-trained vectors get updated during training, as used in Rocktäschel et al., 2015. An alternative is to scale down the gradient of non-OOV words by a factor of k. 
+
+## License
+
+MIT
