@@ -35,7 +35,8 @@ function BatchLoader.create(data_dir, max_sentence_l , batch_size)
     local valid_file = path.join(data_dir, 'dev.txt')
     local test_file = path.join(data_dir, 'test.txt')
     local input_files = {train_file, valid_file, test_file}
-    local input_w2v = 'vectors.txt'
+    local input_w2v = path.join(data_dir, 'word2vec.txt')
+    
 
     -- construct a tensor with all the data
     local s1, s2, label, idx2word, word2idx, word2vec = BatchLoader.text_to_tensor(input_files, max_sentence_l, input_w2v)
