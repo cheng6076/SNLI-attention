@@ -252,6 +252,7 @@ function feval(x)
   end
   return result, grad_params 
 end
+-- end of feval 
 
 -- start training
 train_losses = {}
