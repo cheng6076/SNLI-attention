@@ -4,7 +4,7 @@ require 'nngraph'
 require 'rnn'
 model_utils = require 'util.model_utils'
 BatchLoader = require 'util.BatchLoader'
-require 'util.MaskedLoss'
+-- require 'util.MaskedLoss'
 require 'util.misc'
 require 'util.CAveTable'
 require 'optim'
@@ -252,6 +252,7 @@ function feval(x)
   end
   return result, grad_params 
 end
+-- end of feval 
 
 -- start training
 train_losses = {}

@@ -2,6 +2,32 @@ local BatchLoader = {}
 local stringx = require('pl.stringx')
 BatchLoader.__index = BatchLoader
 
+
+function BatchLoader.labelToNumber(label)
+   local result
+   if label == '-' then
+      result = 3
+      print ('labelToNum sees label -', label)
+      -- returning 3 will cause program to abort (it is expecting values 0..2)
+      return result
+   end
+   if label == 'neutral' then
+      result = 0
+      return result
+   end
+   if label == 'contradiction' then
+      result = 1
+      return result
+   end
+   if label == 'entailment' then
+      result = 2
+      return result
+   end
+   print ('labelToNum sees unknown label', label)
+   -- returning -1 will cause program to abort.
+   return -1
+end
+
 function BatchLoader.create(data_dir, max_sentence_l , batch_size)
     local self = {}
     setmetatable(self, BatchLoader)
@@ -9,7 +35,8 @@ function BatchLoader.create(data_dir, max_sentence_l , batch_size)
     local valid_file = path.join(data_dir, 'dev.txt')
     local test_file = path.join(data_dir, 'test.txt')
     local input_files = {train_file, valid_file, test_file}
-    local input_w2v = 'vectors.txt'
+    local input_w2v = path.join(data_dir, 'word2vec.txt')
+    
 
     -- construct a tensor with all the data
     local s1, s2, label, idx2word, word2idx, word2vec = BatchLoader.text_to_tensor(input_files, max_sentence_l, input_w2v)
@@ -101,7 +128,7 @@ function BatchLoader.text_to_tensor(input_files, max_sentence_l, input_w2v)
           sentence_num = sentence_num + 1
           local triplet = stringx.split(line, '\t')
           local label, s1, s2 = triplet[1], triplet[2], triplet[3]
-          labels[split][sentence_num] = tonumber(label) + 1
+          labels[split][sentence_num] = BatchLoader.labelToNumber(label) + 1
           -- append tokens in the sentence1
           output_tensors1[split][sentence_num][1] = 2
           local word_num = 1
