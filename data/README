@@ -6,6 +6,6 @@ word2vec.txt
 *******************
 SNLI format:
 label(0, 1, 2) \t sentence1 \t sentence2 \n
-
+(see example_input.txt for example)
 word2vec format:
 word 300d_vector \n

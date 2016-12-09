@@ -20,6 +20,7 @@ function decoder_deep_w2v.lstmn(input_size, rnn_size, dropout, word_emb_size, ba
   table.insert(inputs, nn.Identity()()) -- prev_h_table [h0, h1, h2... h(t-1)] for decoder
   table.insert(inputs, nn.Identity()()) -- enc_c_table [c0, c1, c2... cm] for encoder
   table.insert(inputs, nn.Identity()()) -- enc_h_table [h0, h1, h2... hm] for encoder
+  table.insert(inputs, nn.Identity()()) -- mask
 
   -- inputs
   local x, word_vec
@@ -30,6 +31,7 @@ function decoder_deep_w2v.lstmn(input_size, rnn_size, dropout, word_emb_size, ba
   local prev_h_table = inputs[5]
   local enc_c_table = inputs[6]
   local enc_h_table = inputs[7]
+  local mask = inputs[8] 
   word_vec_layer = LookupTable(input_size, vec_size, word2vec)
   word_vec_layer.name = 'dec_lookup'
   word_vec = word_vec_layer(inputs[1])
@@ -45,7 +47,7 @@ function decoder_deep_w2v.lstmn(input_size, rnn_size, dropout, word_emb_size, ba
   intra_x = nn.CAddTable()({intra_x, intra_a})
   local intra_h = nn.Linear(rnn_size, rnn_size)(nn.View(-1, rnn_size)(prev_h_join))   
   intra_h = nn.View(batch_size, -1)(intra_h)
-  local intra_sum = nn.Tanh()(nn.ReplicateAdd()({intra_h, intra_x}))
+  local intra_sum = nn.Tanh()(nn.AddScalar()({intra_h, intra_x}))
   intra_sum = nn.View(-1, rnn_size)(intra_sum)
   local intra_score = nn.Linear(rnn_size, 1)(intra_sum)  
   intra_score = nn.View(batch_size, -1)(intra_score)
@@ -64,11 +66,11 @@ function decoder_deep_w2v.lstmn(input_size, rnn_size, dropout, word_emb_size, ba
   inter_x = nn.CAddTable()({inter_x, inter_a})
   local inter_h = nn.Linear(rnn_size, rnn_size)(nn.View(-1, rnn_size)(enc_h_join))   
   inter_h = nn.View(batch_size, -1)(inter_h)
-  local inter_sum = nn.Tanh()(nn.ReplicateAdd()({inter_h, inter_x}))
+  local inter_sum = nn.Tanh()(nn.AddScalar()({inter_h, inter_x}))
   inter_sum = nn.View(-1, rnn_size)(inter_sum)
   local inter_score = nn.Linear(rnn_size, 1)(inter_sum)  
   inter_score = nn.View(batch_size, -1)(inter_score)
-  inter_score = nn.SoftMax(2)(inter_score) 
+  inter_score = nn.SoftMax(2)(nn.CMulTable(){inter_score, mask}) 
   inter_score = nn.View(batch_size, 1, -1)(inter_score)
   enc_h_join = nn.View(batch_size, -1, rnn_size)(enc_h_join)
   enc_c_join = nn.View(batch_size, -1, rnn_size)(enc_c_join)

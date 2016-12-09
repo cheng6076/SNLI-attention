@@ -15,6 +15,7 @@ function encoder_lstmn_w2v.lstmn(input_size, rnn_size, dropout, word_emb_size, b
   table.insert(inputs, nn.Identity()()) -- x
   table.insert(inputs, nn.Identity()()) -- prev_c_table [c0, c1, c2... c(t-1)]
   table.insert(inputs, nn.Identity()()) -- prev_h_table [h0, h1, h2... h(t-1)]
+  table.insert(inputs, nn.Identity()()) -- mask
 
   local x, input_size_L, word_vec
   local outputs = {}
@@ -22,6 +23,7 @@ function encoder_lstmn_w2v.lstmn(input_size, rnn_size, dropout, word_emb_size, b
   -- c,h from previous timesteps
   local prev_c_table = inputs[2]
   local prev_h_table = inputs[3]
+  local m = inputs[4]
 
   -- the input to this layer
   word_vec_layer = LookupTable(input_size, vec_size, word2vec)
@@ -35,13 +37,12 @@ function encoder_lstmn_w2v.lstmn(input_size, rnn_size, dropout, word_emb_size, b
   local attention_x = nn.Linear(input_size_L, rnn_size)(x)
   local attention_h = nn.Linear(rnn_size, rnn_size)(nn.View(-1, rnn_size)(prev_h_join))   
   attention_h = nn.View(batch_size, -1)(attention_h)
-  local attention_sum = nn.Tanh()(nn.ReplicateAdd()({attention_h, attention_x}))
+  local attention_sum = nn.Tanh()(nn.AddScalar()({attention_h, attention_x}))
   attention_sum = nn.View(-1, rnn_size)(attention_sum)
   local attention_score = nn.Linear(rnn_size, 1)(attention_sum)  
   attention_score = nn.View(batch_size, -1)(attention_score)
   attention_score = nn.SoftMax(2)(attention_score) 
   attention_score = nn.View(batch_size, 1, -1)(attention_score)
-
   prev_h_join = nn.View(batch_size, -1, rnn_size)(prev_h_join)
   prev_c_join = nn.View(batch_size, -1, rnn_size)(prev_c_join)
   local prev_h = nn.View(batch_size, rnn_size)(nn.MM(false, false)({attention_score, prev_h_join}))  --this is the allignment vector at time step t
@@ -68,7 +69,8 @@ function encoder_lstmn_w2v.lstmn(input_size, rnn_size, dropout, word_emb_size, b
     })
     -- gated cells form the output
   local next_h = nn.CMulTable()({out_gate, nn.Tanh()(next_c)})
-    
+  next_c = nn.Maskh()({prev_c, next_c, m})  
+  next_h = nn.Maskh()({prev_h, next_h, m})
   table.insert(outputs, next_c)
   table.insert(outputs, next_h)
 
